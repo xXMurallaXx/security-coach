@@ -7,6 +7,22 @@
 
 **Security Coach** es una solución de ciberseguridad integral compuesta por un agente EDR ligero (Extensión de Chrome) y un motor de análisis Backend (Python/FastAPI). Su objetivo es auditar, detectar y mitigar amenazas web en tiempo real, operando bajo principios de privacidad por diseño (*Privacy by Design*) y enviando telemetría a un Centro de Operaciones de Seguridad (SOC).
 
+### 📸 Galería del Proyecto
+
+**1. Dashboard del SOC (Threat Intelligence)**
+![Dashboard SOC](images/dashboard.png)
+
+**2. Panel de Control del Usuario**
+![Popup Extensión](images/popup.png)
+
+**3. Interceptación de Amenazas en Tiempo Real**
+![Alerta Google](images/banner-google.png)
+![Peligro Crítico](images/banner-rojo.png)
+![Conexión Insegura](images/banner-gris.png)
+
+**4. Notificaciones ChatOps (Integración SOC)**
+![Alerta Telegram](images/alerta-telegram.png)
+
 ---
 
 ## ✨ Características Principales
