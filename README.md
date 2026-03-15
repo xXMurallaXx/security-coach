@@ -42,7 +42,7 @@
 ### 1. Despliegue del Backend (Servidor SOC)
 ```bash
 # Clonar el repositorio
-git clone [https://github.com/tu-usuario/security-coach.git](https://github.com/tu-usuario/security-coach.git)
+git clone [https://github.com/xXMurallaXx/security-coach.git](https://github.com/xXMurallaXx/security-coach.git)
 cd security-coach
 
 # Configurar variables de entorno (Crear archivo .env)
