@@ -1,0 +1,9 @@
+# Entornos virtuales
+__pycache__/
+
+# Archivos de configuración privada (¡Súper importante!)
+.env
+
+# Base de datos (No queremos subir los logs de ataques a internet)
+*.db
+*.sqlite3
