@@ -10,12 +10,33 @@ from urllib.parse import urlparse, parse_qs, urlencode, urlunparse  # Para desar
 import os
 import requests
 from dotenv import load_dotenv
+import whois
+import logging
+import json
+from pydantic import BaseModel
 
 # --- CARGAR VARIABLES DE ENTORNO ---
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+
+# --- CONFIGURACIÓN DE LOGS PARA WAZUH ---
+#Creamos un "escritor" silencioso para no llenar la consola de mensajes, solo en el archivo
+logger = logging.getLogger("SecurityCoach")
+logger.setLevel(logging.INFO)
+
+# Le decimos que cree un archivo llamado "security_coach.log" en la carpeta principal
+file_handler = logging.FileHandler("security_coach.log", encoding='utf-8')
+# Wazuh necesita JSON puro, así que le quitamos la fecha y la hora que Python pone por defecto (ya va dentro del JSON)
+file_handler.setFormatter(logging.Formatter('%(message)s')) 
+logger.addHandler(file_handler)
+
+# --- MODELOS DE DATOS ---
+class FileHashRequest(BaseModel):
+    filename: str
+    file_hash: str
+
 
 # --- FUNCIÓN DE DATA MASKING (PRIVACIDAD) ---
 def enmascarar_datos_sensibles(url):
@@ -48,7 +69,7 @@ def enmascarar_datos_sensibles(url):
         return url_limpia # Si algo falla, al menos devolvemos la URL sin emails
 
 # --- FUNCIÓN DE GOOGLE  ---
-API_KEY = "AIzaSyApNsq0VrpK4eSb2gTVT0UvDyLTZTPgycA"
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 SAFE_BROWSING_URL = f"https://safebrowsing.googleapis.com/v4/threatMatches:find?key={GOOGLE_API_KEY}"
 
 def check_google_reputation(url):
@@ -70,6 +91,41 @@ def check_google_reputation(url):
     except Exception as e:
         print(f"❌ Error de conexión con Google: {e}")
         return None
+ # --- SISTEMA DE INTELIGENCIA DE AMENAZAS (WHOIS) ---
+# Diccionario para recordar dominios y no saturar el servidor WHOIS
+whois_cache = {}
+
+def check_domain_age(domain):
+    # Si ya lo buscamos antes, devolvemos el resultado de la memoria
+    if domain in whois_cache:
+        return whois_cache[domain]
+    
+    try:
+        print(f"🔍 Consultando WHOIS para: {domain}...")
+        domain_info = whois.whois(domain)
+        creation_date = domain_info.creation_date
+        
+        # A veces WHOIS devuelve una lista de fechas, cogemos la primera
+        if isinstance(creation_date, list):
+            creation_date = creation_date[0]
+            
+        if creation_date:
+            # Limpiamos zonas horarias para evitar errores matemáticos
+            if creation_date.tzinfo is not None:
+                creation_date = creation_date.replace(tzinfo=None)
+                
+            dias_vida = (datetime.now() - creation_date).days
+            whois_cache[domain] = dias_vida
+            print(f"✅ WHOIS: {domain} tiene {dias_vida} días de vida.")
+            return dias_vida
+            
+    except Exception as e:
+        print(f"❌ Error en WHOIS para {domain}: {e}")
+    
+    # Si falla la consulta o el dominio oculta datos, guardamos -1
+    whois_cache[domain] = -1 
+    return -1
+   
 # Función de distancia de Levenshtein simple en Python
 def levenshtein_distance(s1, s2):
     if len(s1) < len(s2):
@@ -136,10 +192,9 @@ def verificar_rate_limit(request: Request):
 router = APIRouter()
 
 # --- FUNCIÓN PARA ENVIAR ALERTAS SOC POR TELEGRAM ---
+# --- FUNCIÓN PARA ENVIAR ALERTAS SOC POR TELEGRAM ---
 def enviar_alerta_telegram(mensaje: str):
     print("\n--- INICIANDO ENVÍO DE TELEGRAM ---")
-    print(f"Token detectado: {TELEGRAM_TOKEN}")
-    print(f"Chat ID detectado: {TELEGRAM_CHAT_ID}")
     
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         print("❌ ERROR: Python no encuentra las claves. El .env no se está leyendo bien.")
@@ -153,9 +208,12 @@ def enviar_alerta_telegram(mensaje: str):
     }
     
     try:
-        print("📡 Enviando petición a los servidores de Telegram...")
+        print("📡 Enviando alerta encriptada al SOC (Telegram)...")
         respuesta = requests.post(url, json=payload, timeout=5)
-        print(f"Respuesta de Telegram: Código {respuesta.status_code}")
+        if respuesta.status_code == 200:
+            print("✅ Alerta entregada con éxito.")
+        else:
+            print(f"⚠️ Telegram devolvió código: {respuesta.status_code}")
         print("-----------------------------------\n")
     except Exception as e:
         print(f"❌ Error interno al conectar con Telegram: {e}")
@@ -226,6 +284,16 @@ async def receive_event(request: Request):
                     alert_msg = f"⚠️ SITIO SOSPECHOSO: {url} se parece mucho a {original}"
                     severity = "HIGH"    
 
+        # --- NUEVO: DETECCIÓN DE DOMINIOS BEBÉ (WHOIS) ---
+        # Solo consultamos WHOIS si la web pide datos sensibles, para ahorrar recursos
+        if alert_msg is None and has_sensitive_inputs:
+            dias_vida = check_domain_age(dominio)
+            
+            # Si el dominio tiene menos de 30 días, disparamos alerta de Riesgo Alto
+            if 0 <= dias_vida < 30:
+                alert_msg = f"⚠️ INFRAESTRUCTURA NUEVA: El dominio {dominio} fue creado hace solo {dias_vida} días. Comportamiento típico de Phishing."
+                severity = "HIGH"
+                
         # Check de HTTP + Formularios (Añadimos "if alert_msg is None" para no pisar el anterior)
         if alert_msg is None and protocol == "http:":
             if has_sensitive_inputs:
@@ -245,7 +313,7 @@ async def receive_event(request: Request):
                 if not csp_ok: faltan.append("CSP (Anti-XSS)")
                 
                 alert_msg = f"⚠️ PROTECCIÓN DÉBIL: La web pide contraseña pero carece de escudos clave: {', '.join(faltan)}."
-                severity = "HIGH"        
+                severity = "HIGH"     
 
 # 3. GUARDAR EN LA BASE DE DATOS (CON PRIVACIDAD)
     # Pasamos la URL por nuestra función de limpieza antes de guardarla
@@ -259,6 +327,22 @@ async def receive_event(request: Request):
     )
     conn.commit()
     conn.close()
+    # --- GENERAR LOG PARA WAZUH ---
+    try:
+        log_wazuh = {
+            "integration": "security_coach_edr",
+            "timestamp": timestamp,
+            "srcip": request.client.host,
+            "url": url_segura, # Usamos la URL censurada para cumplir con la privacidad
+            "protocol": protocol,
+            "severity": severity,
+            "alert_message": alert_msg if alert_msg else "Navegación segura",
+            "action": "blocked" if severity in ["CRITICAL", "HIGH"] else "allowed"
+        }
+            # Convertimos el diccionario a un string JSON y lo escribimos en el archivo
+        logger.info(json.dumps(log_wazuh))
+    except Exception as e:
+        print(f"Error escribiendo log para Wazuh: {e}")
 
 # --- DISPARAR ALERTA DE TELEGRAM SI ES CRÍTICO ---
     if severity == "CRITICAL":
@@ -360,6 +444,69 @@ async def get_password():
 from datetime import datetime 
 
 from datetime import datetime
+
+# --- SISTEMA DE INSPECCIÓN DE DESCARGAS (VIRUSTOTAL) ---
+@router.post("/check_download")
+async def check_download_hash(data: FileHashRequest):
+    vt_api_key = os.getenv("VIRUSTOTAL_API_KEY")
+    
+    if not vt_api_key:
+        print("⚠️ Advertencia: Falta API Key de VirusTotal.")
+        return {"action": "ALLOW", "reason": "Falta API Key."}
+
+    # Endpoint de la API v3 de VirusTotal
+    url = f"https://www.virustotal.com/api/v3/files/{data.file_hash}"
+    headers = {
+        "accept": "application/json",
+        "x-apikey": vt_api_key
+    }
+
+    try:
+        response = requests.get(url, headers=headers)
+        
+        if response.status_code == 200:
+            vt_data = response.json()
+            stats = vt_data['data']['attributes']['last_analysis_stats']
+            malicious_votes = stats['malicious']
+            
+            if malicious_votes >= 3:
+                # 1. ALERTA PARA WAZUH (En JSON)
+                alert_msg = f"🛑 ¡DESCARGA BLOQUEADA!: El archivo '{data.filename}' es MALWARE conocido."
+                log_entry = {
+                    "integration": "security_coach_edr",
+                    "timestamp": datetime.now().isoformat(),
+                    "alert_message": alert_msg,
+                    "severity": "CRITICAL",
+                    "filename": data.filename,
+                    "sha256": data.file_hash,
+                    "vt_malicious_votes": malicious_votes,
+                    "action": "blocked"
+                }
+                logger.info(json.dumps(log_entry))
+                
+                # 2. ALERTA PARA TELEGRAM
+                mensaje_tg = (
+                    f"🚨 <b>ALERTA CRÍTICA: MALWARE DETECTADO</b> 🚨\n\n"
+                    f"📁 <b>Archivo:</b> {data.filename}\n"
+                    f"🦠 <b>Motores AV:</b> {malicious_votes} detecciones\n"
+                    f"📝 <b>Acción:</b> Descarga bloqueada en seco.\n\n"
+                    f"🛡️ <i>Security Coach SOC Automático</i>"
+                )
+                enviar_alerta_telegram(mensaje_tg)
+
+                # 3. RESPUESTA AL NAVEGADOR (Bloqueo)
+                return {"action": "BLOCK", "reason": f"Detectado por {malicious_votes} motores en VirusTotal."}
+            else:
+                return {"action": "ALLOW", "reason": "Archivo limpio."}
+                
+        elif response.status_code == 404:
+            return {"action": "ALLOW", "reason": "Hash desconocido. Se permite por defecto."}
+        else:
+            return {"action": "ALLOW", "reason": f"Error de API: {response.status_code}"}
+
+    except Exception as e:
+        print(f"❌ Error conectando con VirusTotal: {e}")
+        return {"action": "ALLOW", "reason": "Fallo de conexión."}
 
 # --- EXPORTAR DASHBOARD EJECUTIVO (ESTILO WAZUH) ---
 @router.get("/export")
