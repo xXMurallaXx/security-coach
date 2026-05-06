@@ -156,11 +156,130 @@ const inyectarEscudoGenerador = () => {
                 });
 
                 observador.observe(document.body, { childList: true, subtree: true });
+                
+                // NUEVO MÓDULO: PROTECCIÓN FINANCIERA (ZERO-TRUST + LUHN)
+                
+                // 1. Motor Matemático de Luhn
+                function validarLuhn(numeroTarjeta) {
+                    let valor = numeroTarjeta.replace(/\D/g, '');
+                    if (valor.length < 13 || valor.length > 19) return false;
+                    let suma = 0;
+                    let multiplicarPorDos = false;
+                    for (let i = valor.length - 1; i >= 0; i--) {
+                        let digito = parseInt(valor.charAt(i), 10);
+                        if (multiplicarPorDos) {
+                            digito *= 2;
+                            if (digito > 9) digito -= 9;
+                        }
+                        suma += digito;
+                        multiplicarPorDos = !multiplicarPorDos;
+                    }
+                    return (suma % 10) === 0;
+                }
+
+                // 2. Inteligencia de Contexto y Lista Blanca
+                const regexFinanciero = /(cvv|cvc|tarjeta|caducidad|credit card|mastercard|visa)/i;
+                const PASARELAS_CONFIABLES = ["redsys.es", "stripe.com", "paypal.com", "amazon.es"];
+
+                function esDominioConfiable(hostnameActual) {
+                    return PASARELAS_CONFIABLES.some(dominioSeguro => hostnameActual.endsWith(dominioSeguro));
+                }
+
+                // 3. El Vigilante del Teclado (Event Listener)
+                document.addEventListener('keyup', function(evento) {
+                    let elemento = evento.target;
+                    // Solo vigilamos cajas de texto o números
+                    if (elemento.tagName !== 'INPUT' || (elemento.type !== 'text' && elemento.type !== 'number' && elemento.type !== 'tel')) return;
+
+                    let textoIntroducido = elemento.value;
+                    let soloNumeros = textoIntroducido.replace(/\D/g, '');
+
+                    // Filtro de rendimiento: Solo activamos Luhn si hay 13 o más números
+                    if (soloNumeros.length >= 13 && validarLuhn(textoIntroducido)) {
+                        
+                        // Buscamos palabras clave en el entorno del input
+                        let textoContexto = document.body.innerText + elemento.placeholder + elemento.name;
+                        
+                        if (regexFinanciero.test(textoContexto)) {
+                            let dominioActual = window.location.hostname;
+                            
+                            // Comprobamos la Lista Blanca
+                            if (!esDominioConfiable(dominioActual)) {
+                                
+                                // ¡ATAQUE DETECTADO! Bloqueo preventivo físico
+                                elemento.value = ""; // Vaciamos la caja
+                                elemento.disabled = true; // La bloqueamos
+                                elemento.style.border = "3px solid #cc0000"; // Borde rojo
+                                elemento.style.backgroundColor = "#ffebeb"; // Fondo rojizo
+                                
+                                // Lanzamos tu banner de alerta nativo
+                                chrome.runtime.sendMessage({ 
+                                    tipo: "MOSTRAR_ALERTA_FRONTEND", 
+                                    mensaje: "¡BLOQUEO PREVENTIVO! Estás introduciendo una tarjeta en un dominio no autorizado (" + dominioActual + ").",
+                                    gravedad: "CRITICAL"
+                                });
+                            }
+                        }
+                    }
+                });
+                // NUEVO MÓDULO: ESCUDO ANTI-EXFILTRACIÓN Y DLP (MEMORIA)
+                // 1. Bloqueo de Portapapeles (Mitigación de secuestro de memoria)
+                document.addEventListener('copy', (evento) => {
+                    let elemento = evento.target;
+                    // Si están intentando copiar de un campo de contraseña o de la tarjeta...
+                    if (elemento.tagName === 'INPUT' && (elemento.type === 'password' || validarLuhn(elemento.value))) {
+                        evento.preventDefault(); // Cortamos la acción física
+                        console.warn("🛡️ Security Coach: Intento de copia de datos sensibles bloqueado por políticas DLP.");
+                    }
+                });                
             }
-
-
         });
+        // NUEVO MÓDULO: API HOOKING (NATIVO MANIFEST V3)
+        chrome.scripting.executeScript({
+            target: { tabId: tabId },
+            world: "MAIN", // <--- ESTA ES LA LLAVE MAESTRA QUE EVITA EL ERROR ROJO
+            func: () => {
+                if (!window.edrHookActivado) {
+                    window.edrHookActivado = true;
+                    const fetchOriginal = window.fetch;
+                    
+                    console.log("🛡️ [EDR] Interceptor de Red activado en el Main World.");
 
+                    window.fetch = async function(...args) {
+                        const urlDestino = args[0];
+                        const opciones = args[1];
+
+                        // Si la petición lleva datos (POST)...
+                        if (opciones && opciones.body && typeof opciones.body === 'string') {
+                            const passwordInputs = document.querySelectorAll('input[type="password"]');
+                            let exfiltracionDetectada = false;
+
+                            passwordInputs.forEach(input => {
+                                // Si la contraseña tiene más de 3 letras y va en el paquete...
+                                if (input.value.length > 3 && opciones.body.includes(input.value)) {
+                                    exfiltracionDetectada = true;
+                                }
+                            });
+
+                            // Bloqueamos si cazamos la exfiltración
+                            if (exfiltracionDetectada && !urlDestino.includes('127.0.0.1')) {
+                                console.error("🛑 BLOQUEO EDR: Intento de exfiltración hacia: " + urlDestino);
+                                
+                                const alertaDLP = document.createElement('div');
+                                alertaDLP.style.cssText = "position:fixed; top:60px; left:0; width:100%; background:#8b0000; color:white; text-align:center; padding:10px; z-index:999999; font-weight:bold;";
+                                alertaDLP.innerText = "🚨 ALERTA DLP: Se ha bloqueado un intento de robo de credenciales en segundo plano.";
+                                document.body.appendChild(alertaDLP);
+                                setTimeout(() => alertaDLP.remove(), 5000);
+
+                                return Promise.reject(new Error("Conexión bloqueada por Security Coach (DLP)"));
+                            }
+                        }
+                        // Si todo es normal, continúa el tráfico
+                        return fetchOriginal.apply(this, args);
+                    };
+                }
+            }
+        });
         // 3. LOGICA INICIAL PARA WEBS SIN PASSWORD (HTTP SIMPLE)
         // Esto asegura que si es HTTP pero NO tiene password, también se reporte una vez
         try {
@@ -235,6 +354,7 @@ function mostrarBannerEnPantalla(tabId, msg, severity) {
                 top: 0 !important;
                 left: 0 !important;
                 width: 100% !important;
+                box-sizing: border-box !important;
                 min-height: 60px !important;
                 background-color: ${bgColor} !important;
                 color: white !important;
@@ -242,7 +362,7 @@ function mostrarBannerEnPantalla(tabId, msg, severity) {
                 display: flex !important;
                 align-items: center !important;
                 justify-content: space-between !important;
-                padding: 0 30px !important;
+                padding: 0 40px 0 20px !important;
                 font-family: sans-serif !important;
                 font-weight: bold !important;
                 box-shadow: 0 4px 10px rgba(0,0,0,0.5) !important;
@@ -267,6 +387,8 @@ function mostrarBannerEnPantalla(tabId, msg, severity) {
                 cursor: pointer !important;
                 border-radius: 5px !important;
                 min-width: 120px !important;
+                margin-right: 10px !important;
+                white-space: nowrap !important;
             `;
 
             div.appendChild(textoMensaje);
@@ -286,16 +408,19 @@ function mostrarBannerEnPantalla(tabId, msg, severity) {
             const btn = div.querySelector('#btn-cerrar-coach');
             
             btn.addEventListener('click', () => {
-                // 1. Buscamos si hay un campo de password bloqueado
-                const passwordInput = document.querySelector('input[type="password"]');
+                // 1. Buscamos TODOS los inputs de la página (contraseñas y textos de tarjeta)
+                const todosLosInputs = document.querySelectorAll('input');
                 
-                // 2. Si existe, lo liberamos
-                if (passwordInput) {
-                    passwordInput.disabled = false;
-                    passwordInput.style.backgroundColor = ""; 
-                }
+                // 2. Los recorremos y liberamos los que nuestro EDR haya bloqueado
+                todosLosInputs.forEach(input => {
+                    if (input.disabled) {
+                        input.disabled = false; // Le devolvemos el control al usuario
+                        input.style.backgroundColor = ""; // Quitamos el fondo rojizo
+                        input.style.border = ""; // Quitamos el borde rojo de alerta
+                    }
+                });
 
-                // 3. BORRAR EL BANNER (Esta línea es la que hace que desaparezca)
+                // 3. BORRAR EL BANNER (Desaparece visualmente)
                 div.remove();
             });
 
@@ -330,7 +455,77 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         mostrarBannerEnPantalla(sender.tab.id, request.mensaje, request.gravedad);
     }
 });
+// --- MÓDULO EDR: INTERCEPTOR DE DESCARGAS Y HASHING ---
 
+// Función criptográfica para calcular el SHA-256 de un archivo en memoria
+async function calculateSHA256(arrayBuffer) {
+    const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    return hashHex;
+}
+
+// El Vigilante: Salta cuando se inicia cualquier descarga
+chrome.downloads.onCreated.addListener(async (downloadItem) => {
+    // Evitamos analizar archivos temporales o descargas internas del propio navegador
+    if (downloadItem.state !== "in_progress" || downloadItem.url.startsWith("blob:") || downloadItem.url.startsWith("data:")) {
+        return;
+    }
+
+    console.log(`[EDR] 🚨 Nueva descarga detectada: ${downloadItem.filename}`);
+    
+    // 1. CONGELAMOS LA DESCARGA INSTANTÁNEAMENTE
+    chrome.downloads.pause(downloadItem.id, async () => {
+        console.log(`[EDR] ⏸️ Descarga pausada. Iniciando análisis heurístico...`);
+        
+        try {
+            // 2. Extraemos el archivo a la memoria (RAM) para analizarlo
+            const response = await fetch(downloadItem.url);
+            const arrayBuffer = await response.arrayBuffer();
+            
+            // 3. Calculamos el Hash SHA-256 militar
+            const fileHash = await calculateSHA256(arrayBuffer);
+            console.log(`[EDR] 🧬 Hash calculado: ${fileHash}`);
+
+            // 4. Enviamos el Hash al SOC (Tu servidor Python)
+            // Ajusta el puerto si tu servidor usa uno distinto al 8001
+            const socResponse = await fetch("http://127.0.0.1:8001/check_download", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    filename: downloadItem.filename || "archivo_desconocido",
+                    file_hash: fileHash
+                })
+            });
+
+            const result = await socResponse.json();
+            
+            // 5. EJECUTAMOS LA ORDEN DEL SERVIDOR
+            if (result.action === "BLOCK") {
+                console.warn(`[EDR] 🛑 MALWARE CONFIRMADO: ${result.reason}`);
+                chrome.downloads.cancel(downloadItem.id);
+                
+                // Opcional: Lanzar una notificación visual al empleado
+                chrome.notifications.create({
+                    type: "basic",
+                    iconUrl: "icon.png", // Asegúrate de tener un icon.png en tu extensión
+                    title: "Security Coach: BLOQUEO CRÍTICO",
+                    message: `La descarga de ${downloadItem.filename} ha sido cancelada. Es malware reportado.`
+                });
+            } else {
+                console.log(`[EDR] ✅ Archivo limpio. Reanudando descarga.`);
+                chrome.downloads.resume(downloadItem.id);
+            }
+
+        } catch (error) {
+            console.error("[EDR] ❌ Error durante el análisis del archivo:", error);
+            // Si hay un error (ej. archivo muy grande o red caída), por precaución en corporativo dejamos pasar.
+            chrome.downloads.resume(downloadItem.id);
+        }
+    });
+});
 
 
 

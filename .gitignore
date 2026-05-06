@@ -1,9 +1,20 @@
-# Entornos virtuales
-__pycache__/
-
-# Archivos de configuración privada (¡Súper importante!)
+# Entornos virtuales de Python
+venv/
+backend/venv/
 .env
 
-# Base de datos (No queremos subir los logs de ataques a internet)
+# Bases de datos y Logs (¡OPSEC!)
 *.db
+*.sqlite
 *.sqlite3
+*.log
+backend/security_coach.db
+backend/security_coach.log
+
+# Archivos compilados y temporales
+__pycache__/
+*.pyc
+*.pyo
+
+# Archivos comprimidos
+*.zip
