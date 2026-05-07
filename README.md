@@ -55,7 +55,7 @@
 ### 1. Preparar el Backend (Servidor SOC)
 ```bash
 # Clonar el repositorio
-git clone [https://github.com/TuUsuario/security-coach.git](https://github.com/TuUsuario/security-coach.git)
+git clone [https://github.com/xXMurallaXx/security-coach.git](https://github.com/xXMurallaXx/security-coach.git)
 cd security-coach/backend
 
 # Crear y activar entorno virtual
