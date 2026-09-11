@@ -82,45 +82,29 @@ const inyectarEscudoGenerador = () => {
 
         // --- VIGILANTE DE CONTRASEÑAS (K-ANONYMITY EN EL FRONTEND) ---
         
-        // 1. Función para crear el Hash SHA-1 nativo
-        const generarHashSHA1 = async (texto) => {
-            const buffer = new TextEncoder().encode(texto);
-            const hashBuffer = await crypto.subtle.digest('SHA-1', buffer);
-            const hashArray = Array.from(new Uint8Array(hashBuffer));
-            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
-        };
-
-        // 2. Escuchamos cuando el usuario termina de escribir y sale del campo ('blur')
-        passwordField.addEventListener('blur', async () => {
+        // --- VIGILANTE DE CONTRASEÑAS (DELEGADO AL SERVICE WORKER) ---
+        
+        // Escuchamos cuando el usuario termina de escribir y sale del campo ('blur')
+        passwordField.addEventListener('blur', () => {
             const passwordMecaneada = passwordField.value;
             if (passwordMecaneada.length < 4) return; // Ignoramos si está vacío o es muy corta
 
-            // Calculamos el hash y lo partimos
-            const hashCompleto = await generarHashSHA1(passwordMecaneada);
-            const prefijo = hashCompleto.substring(0, 5);
-            const sufijo = hashCompleto.substring(5);
-
-            // Le pedimos al background que consulte HIBP de forma segura
-            chrome.runtime.sendMessage({ tipo: "COMPROBAR_HIBP", prefix: prefijo }, (response) => {
-                if (response && response.listaPwned) {
-                    // Verificamos si nuestro sufijo está en la lista negra que nos devolvió HIBP
-                    const lineas = response.listaPwned.split('\n');
-                    const estaFiltrada = lineas.some(linea => linea.split(':')[0] === sufijo);
-                    
-                    if (estaFiltrada) {
-                        // Resaltamos el campo en rojo
-                        passwordField.style.border = "3px solid #cc0000";
-                        // Enviamos la orden de mostrar el banner
-                        chrome.runtime.sendMessage({ 
-                            tipo: "MOSTRAR_ALERTA_FRONTEND", 
-                            mensaje: "¡CUIDADO! La contraseña que vas a usar ha sido filtrada por hackers en el pasado. Cámbiala por tu seguridad.",
-                            gravedad: "CRITICAL"
-                        });
-                    } else {
-                        // Pequeño feedback visual de que es segura (opcional)
-                        passwordField.style.border = "2px solid #00cc00";
-                        setTimeout(() => passwordField.style.border = "", 2000);
-                    }
+            // Le pasamos la contraseña en crudo al Service Worker para que él calcule el Hash.
+            // Esto evita el bloqueo de seguridad (crypto.subtle) en páginas HTTP como testfire.net.
+            chrome.runtime.sendMessage({ tipo: "COMPROBAR_HIBP_SEGURO", password: passwordMecaneada }, (response) => {
+                if (response && response.filtrada) {
+                    // Resaltamos el campo en rojo
+                    passwordField.style.border = "3px solid #cc0000";
+                    // Enviamos la orden de mostrar el banner
+                    chrome.runtime.sendMessage({ 
+                        tipo: "MOSTRAR_ALERTA_FRONTEND", 
+                        mensaje: "¡CUIDADO! La contraseña que vas a usar ha sido filtrada por hackers en el pasado. Cámbiala por tu seguridad.",
+                        gravedad: "CRITICAL"
+                    });
+                } else if (response && response.filtrada === false) {
+                    // Pequeño feedback visual de que es segura (opcional)
+                    passwordField.style.border = "2px solid #00cc00";
+                    setTimeout(() => passwordField.style.border = "", 2000);
                 }
             });
         });
@@ -128,19 +112,25 @@ const inyectarEscudoGenerador = () => {
 };
 
                 const buscarYReportar = () => {
+                    if (window.reporteEnviado) return; 
                     if (Date.now() - ultimaAlerta < 3000) return;
                     
-                    const tienePassword = document.querySelector('input[type="password"]') !== null;
-                    if (tienePassword) inyectarEscudoGenerador(); // <--- Llamamos al generador
-                    
-                    ultimaAlerta = Date.now();
-                    chrome.runtime.sendMessage({ 
-                        tipo: "VISITA_DETECTADA",
-                        url: window.location.hostname,
-                        fullUrl: window.location.href,
-                        protocol: window.location.protocol,
-                        has_sensitive_inputs: tienePassword
-                    });
+                    // Retardo estratégico de 500ms para asegurar que el HTML se ha cargado por completo
+                    setTimeout(() => {
+                        const tienePassword = document.querySelector('input[type="password"]') !== null;
+                        if (tienePassword) inyectarEscudoGenerador(); 
+                        
+                        ultimaAlerta = Date.now();
+                        window.reporteEnviado = true;
+
+                        chrome.runtime.sendMessage({ 
+                            tipo: "VISITA_DETECTADA",
+                            url: window.location.hostname,
+                            fullUrl: window.location.href,
+                            protocol: window.location.protocol,
+                            has_sensitive_inputs: tienePassword
+                        });
+                    }, 500);
                 };
 
                 buscarYReportar();
@@ -439,15 +429,34 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             });
         return true; // Mantiene el canal abierto para la respuesta asíncrona
     }
-    if (request.tipo === "COMPROBAR_HIBP") {
-        fetch(`https://api.pwnedpasswords.com/range/${request.prefix}`)
-            .then(r => r.text()) // HIBP devuelve texto plano, no JSON
-            .then(texto => sendResponse({ listaPwned: texto }))
-            .catch(err => {
-                console.error("Error consultando HIBP:", err);
-                sendResponse({ listaPwned: null });
-            });
-        return true; // Obligatorio para respuestas asíncronas con fetch
+    if (request.tipo === "COMPROBAR_HIBP_SEGURO") {
+        // Envolvemos todo en una función asíncrona autoejecutable
+        (async () => {
+            try {
+                // 1. Calculamos el Hash SHA-1 en el entorno seguro del Service Worker
+                const buffer = new TextEncoder().encode(request.password);
+                const hashBuffer = await crypto.subtle.digest('SHA-1', buffer);
+                const hashArray = Array.from(new Uint8Array(hashBuffer));
+                const hashCompleto = hashArray.map(b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+                
+                const prefix = hashCompleto.substring(0, 5);
+                const suffix = hashCompleto.substring(5);
+
+                // 2. Consulta a HIBP mediante K-Anonymity
+                const response = await fetch(`https://api.pwnedpasswords.com/range/${prefix}`);
+                const texto = await response.text();
+
+                // 3. Verificamos si nuestro sufijo está en la respuesta que nos dio HIBP
+                const lineas = texto.split('\n');
+                const estaFiltrada = lineas.some(linea => linea.split(':')[0] === suffix);
+                
+                sendResponse({ filtrada: estaFiltrada });
+            } catch (err) {
+                console.error("Error en motor HIBP:", err);
+                sendResponse({ filtrada: false });
+            }
+        })();
+        return true; // Obligatorio para mantener el canal abierto durante el async/await
     }
 
     // --- MOSTRAR ALERTA DESDE EL VIGILANTE DE CONTRASEÑAS ---

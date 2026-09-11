@@ -18,3 +18,6 @@ __pycache__/
 
 # Archivos comprimidos
 *.zip
+extension.pem
+*.crx
+backend/SOC_log.txt
